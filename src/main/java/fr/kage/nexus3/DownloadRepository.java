@@ -17,6 +17,7 @@ import java.nio.file.Paths;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -50,22 +51,35 @@ public class DownloadRepository implements Runnable {
 		try {
 			if (downloadPath == null)
 				downloadPath = Files.createTempDirectory("nexus3");
-			else if (!downloadPath.toFile().isDirectory() || !downloadPath.toFile().canWrite())
-				throw new IOException("Not a writable directory: " + downloadPath);
+			else{
+				if(!downloadPath.toFile().exists()){
+					LOGGER.info("本地保存文件夹不存在，先创建:{}", downloadPath.toString());
+					downloadPath.toFile().mkdirs();
+				}
+				else{
+					LOGGER.error("源文件夹已经存在:{}", downloadPath.toString());
+					return;
+				}
+			}
 
 			LOGGER.info("Starting download of Nexus 3 repository in local directory {}", downloadPath);
 			executorService = Executors.newFixedThreadPool(10);
 			restTemplate = new RestTemplate();
 
-			executorService.submit(this);
-			executorService.awaitTermination(1, TimeUnit.DAYS);
+			Future future = executorService.submit(this);
+			while(!future.isDone()){
+				try {
+					Thread.currentThread().sleep(10000);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			}
+			//executorService.awaitTermination(1, TimeUnit.DAYS);
 		}
 		catch (IOException e) {
 			LOGGER.error("Unable to create/use directory for local data: " + downloadPath);
 		}
-		catch (InterruptedException e) {
-			// ignore it
-		}
+
 	}
 
 
@@ -95,8 +109,8 @@ public class DownloadRepository implements Runnable {
 		public void run() {
 			LOGGER.info("Retrieving some assets");
 			UriComponentsBuilder getAssets = UriComponentsBuilder.fromHttpUrl(url)
-					.pathSegment("service", "siesta", "rest", "beta", "assets")
-					.queryParam("repositoryId", repositoryId);
+					.pathSegment("service", "rest", "v1", "assets")
+					.queryParam("repository", repositoryId);
 			if (continuationToken != null)
 				getAssets = getAssets.queryParam("continuationToken", continuationToken);
 
@@ -109,6 +123,11 @@ public class DownloadRepository implements Runnable {
 			assetFound.addAndGet(assets.getItems().size());
 			notifyProgress();
 			assets.getItems().forEach(item -> executorService.submit(new DownloadItemTask(item)));
+
+			if(assetFound.get() == assetProcessed.get()){
+				LOGGER.info("Download complete.");
+				return;
+			}
 		}
 	}
 
